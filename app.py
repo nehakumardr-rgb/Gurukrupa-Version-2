@@ -88,10 +88,7 @@ def generate_roster(nurses, availability_df, nurse_departments, department_staff
                     if department not in eligible_departments:
                         model.Add(variable == 0)
 
-            # An Off day applies to the nurse across ALL departments.
-                    if is_off:
-                        model.Add(variable == 0)
-                    elif shift not in allowed:
+                    if is_off or shift not in allowed:
                         model.Add(variable == 0)
 
             # At most one assignment of each shift across departments.
@@ -121,15 +118,35 @@ def generate_roster(nurses, availability_df, nurse_departments, department_staff
             model.Add(sum(daily_assignments) >= workday[nurse, di])
 
     # --------------------------------------------------------
-    # NIGHT PATTERN IS ENFORCED IN THE PER-NURSE RULES BELOW.
-    # The pattern uses a repeating 7-day roster, so Saturday-Sunday-
-    # Monday is treated as a valid consecutive 3-day sequence.
+    # PREFER A GAP BETWEEN CONSECUTIVE SINGLE SHIFTS
     # --------------------------------------------------------
 
-    
+    single_shift_consecutive_penalties = []
+
+    for nurse in nurses:
+        for di in range(len(DAYS) - 1):
+            current_row = availability_lookup[(nurse, DAYS[di])]
+            next_row = availability_lookup[(nurse, DAYS[di + 1])]
+
+            if (
+                current_row["Shift Type"] == "Single Shift"
+                or next_row["Shift Type"] == "Single Shift"
+            ):
+                penalty = model.NewBoolVar(
+                    f"consecutive_single_{nurses.index(nurse)}_{di}"
+                )
+
+                model.Add(
+                    penalty >= workday[nurse, di] + workday[nurse, di + 1] - 1
+                )
+
+                single_shift_consecutive_penalties.append(penalty)
+
     # --------------------------------------------------------
-    # DEPARTMENT STAFFING REQUIREMENTS - MANDATORY MINIMUM
+    # DEPARTMENT STAFFING REQUIREMENTS
     # --------------------------------------------------------
+
+    coverage_shortages = []
 
     for department in departments:
         req = department_staffing_requirements[department]
@@ -143,12 +160,16 @@ def generate_roster(nurses, availability_df, nurse_departments, department_staff
                     for nurse in nurses
                 )
 
-                # Mandatory minimum coverage - cannot be violated.
-                model.Add(assigned >= required)
+                shortage = model.NewIntVar(
+                    0, required,
+                    f"shortage_{department}_{di}_{si}"
+                )
+
+                model.Add(assigned + shortage >= required)
+                coverage_shortages.append(shortage)
 
 
 
-    
     # --------------------------------------------------------
     # NIGHT SHIFT RULES AND INDIVIDUAL SHIFT MINIMUMS
     # --------------------------------------------------------
@@ -183,71 +204,30 @@ def generate_roster(nurses, availability_df, nurse_departments, department_staff
 
         if is_special_nurse:
 
-            # Special nurse: exactly 4 Night shifts on any available days.
+            # All four Night shifts are mandatory.
+            for di in available_night_days:
+                model.Add(
+                    sum(
+                        x[nurse, dept, di, 2]
+                        for dept in departments
+                    ) == 1
+                )
+
+        else:
+
+            # Regular nurses: maximum 2 Night shifts per week.
             model.Add(
                 sum(
                     x[nurse, dept, di, 2]
                     for dept in departments
                     for di in range(len(DAYS))
-                ) == 4
+                ) <= 2
             )
 
-        else:
-
-            # Regular nurses: exactly two consecutive Night shifts,
-            # followed by an Off day explicitly selected by the nurse.
-            # The 7-day schedule repeats, so Saturday-Sunday-Monday
-            # is also checked as a valid Night-Night-Off sequence.
-            valid_pair_starts = []
-            pair_start_vars = {}
-
-            available_night_set = set(available_night_days)
-            selected_off_set = set(off_days)
-
-            for di in range(len(DAYS)):
-                next_day = (di + 1) % len(DAYS)
-                off_day = (di + 2) % len(DAYS)
-
-                pair_start = model.NewBoolVar(
-                    f"night_pair_start_{nurses.index(nurse)}_{di}"
-                )
-                pair_start_vars[di] = pair_start
-
-                is_valid_start = (
-                    di in available_night_set
-                    and next_day in available_night_set
-                    and off_day in selected_off_set
-                )
-
-                if is_valid_start:
-                    valid_pair_starts.append(pair_start)
-                else:
-                    model.Add(pair_start == 0)
-
-            if valid_pair_starts:
-                model.Add(sum(valid_pair_starts) == 1)
-            else:
-                model.Add(
-                    sum(
-                        x[nurse, dept, di, 2]
-                        for dept in departments
-                        for di in range(len(DAYS))
-                    ) == 0
-                )
-
-            # Link Night assignments to the selected pair only.
-            for di in range(len(DAYS)):
-                previous_day = (di - 1) % len(DAYS)
-                night_assignment = sum(
-                    x[nurse, dept, di, 2] for dept in departments
-                )
-                model.Add(
-                    night_assignment
-                    == pair_start_vars[di] + pair_start_vars[previous_day]
-                )
-
-            # Regular nurses: aim for at least 2 Morning and 2 Evening shifts.
-            for si, shift in enumerate(SHIFTS[:2]):
+            # Regular nurses: aim for at least 2 of each shift.
+            # If availability makes this impossible, record the shortfall
+            # instead of making the entire roster infeasible.
+            for si, shift in enumerate(SHIFTS):
 
                 nurse_shift_total = sum(
                     x[nurse, dept, di, si]
@@ -261,7 +241,82 @@ def generate_roster(nurses, availability_df, nurse_departments, department_staff
                 )
 
                 model.Add(nurse_shift_total + shift_shortfall >= 2)
+
                 individual_shift_shortages.append(shift_shortfall)
+
+            # Prefer the two Night shifts to be consecutive.
+            for di in range(len(DAYS) - 1):
+
+                night_today = sum(
+                    x[nurse, dept, di, 2]
+                    for dept in departments
+                )
+
+                night_tomorrow = sum(
+                    x[nurse, dept, di + 1, 2]
+                    for dept in departments
+                )
+
+                night_pair = model.NewBoolVar(
+                    f"night_pair_{nurses.index(nurse)}_{di}"
+                )
+
+                model.Add(night_pair <= night_today)
+                model.Add(night_pair <= night_tomorrow)
+                model.Add(
+                    night_pair >= night_today + night_tomorrow - 1
+                )
+
+                consecutive_night_pairs.append(night_pair)
+
+                # Prefer one Off day after the second Night.
+                if di + 2 < len(DAYS):
+
+                    off_after_pair = model.NewBoolVar(
+                        f"off_after_nights_{nurses.index(nurse)}_{di}"
+                    )
+
+                    model.Add(off_after_pair <= night_pair)
+                    model.Add(
+                        off_after_pair + workday[nurse, di + 2] <= 1
+                    )
+                    model.Add(
+                        off_after_pair >= night_pair - workday[nurse, di + 2]
+                    )
+
+                    off_after_night_pairs.append(off_after_pair)
+
+                    # Prefer Morning or Evening on the next two days.
+                    for target_day in [di + 3, di + 4]:
+
+                        if target_day < len(DAYS):
+
+                            me_assignments = [
+                                x[nurse, dept, target_day, shift_index]
+                                for dept in departments
+                                for shift_index in [0, 1]
+                            ]
+
+                            me_work = model.NewBoolVar(
+                                f"morning_evening_{nurses.index(nurse)}_{di}_{target_day}"
+                            )
+
+                            model.Add(me_work <= sum(me_assignments))
+
+                            for assignment in me_assignments:
+                                model.Add(me_work >= assignment)
+
+                            me_after_rest = model.NewBoolVar(
+                                f"me_after_rest_{nurses.index(nurse)}_{di}_{target_day}"
+                            )
+
+                            model.Add(me_after_rest <= off_after_pair)
+                            model.Add(me_after_rest <= me_work)
+                            model.Add(
+                                me_after_rest >= off_after_pair + me_work - 1
+                            )
+
+                            morning_evening_after_rest.append(me_after_rest)
 
 
     # --------------------------------------------------------
@@ -310,13 +365,14 @@ def generate_roster(nurses, availability_df, nurse_departments, department_staff
     )
 
     model.Minimize(
-    100_000_000 * sum(individual_shift_shortages)
+        2_000_000_000 * sum(coverage_shortages)
+        + 100_000_000 * sum(individual_shift_shortages)
         - 1_000_000 * total_allocated_shifts
         - 250_000 * sum(consecutive_night_pairs)
         - 100_000 * sum(off_after_night_pairs)
         - 50_000 * sum(morning_evening_after_rest)
         + 1_000 * workload_spread
-        
+        + sum(single_shift_consecutive_penalties)
     )
 
 
@@ -330,8 +386,6 @@ def generate_roster(nurses, availability_df, nurse_departments, department_staff
     status = solver.Solve(model)
 
     if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
-        print("SOLVER STATUS:", solver.StatusName(status))
-        print("SOLVER RESPONSE:", solver.ResponseStats())
         return None, status
 
     # --------------------------------------------------------
