@@ -335,7 +335,9 @@ def generate_roster(nurses, availability_df, nurse_departments, department_staff
     status = solver.Solve(model)
 
     if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
-        return None, status
+    print("SOLVER STATUS:", solver.StatusName(status))
+    print("SOLVER RESPONSE:", solver.ResponseStats())
+    return None, status
 
     # --------------------------------------------------------
     # BUILD DEPARTMENT-SPECIFIC ROSTER
