@@ -189,7 +189,7 @@ def generate_roster(nurses, availability_df, nurse_departments, department_staff
                 for dept in departments
                 for di in range(len(DAYS))
             ) == 4
-    )
+        )
 
         else:
 
