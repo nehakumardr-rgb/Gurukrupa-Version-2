@@ -182,13 +182,13 @@ def generate_roster(nurses, availability_df, nurse_departments, department_staff
 
         if is_special_nurse:
 
-    # Special nurse: exactly 4 Night shifts on any available days.
-    model.Add(
-        sum(
-            x[nurse, dept, di, 2]
-            for dept in departments
-            for di in range(len(DAYS))
-        ) == 4
+        # Special nurse: exactly 4 Night shifts on any available days.
+        model.Add(
+            sum(
+                x[nurse, dept, di, 2]
+                for dept in departments
+                for di in range(len(DAYS))
+            ) == 4
     )
 
         else:
