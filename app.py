@@ -148,6 +148,7 @@ def generate_roster(nurses, availability_df, nurse_departments, department_staff
 
 
 
+    
     # --------------------------------------------------------
     # NIGHT SHIFT RULES AND INDIVIDUAL SHIFT MINIMUMS
     # --------------------------------------------------------
@@ -182,14 +183,14 @@ def generate_roster(nurses, availability_df, nurse_departments, department_staff
 
         if is_special_nurse:
 
-        # Special nurse: exactly 4 Night shifts on any available days.
-        model.Add(
-            sum(
-                x[nurse, dept, di, 2]
-                for dept in departments
-                for di in range(len(DAYS))
-            ) == 4
-        )
+            # Special nurse: exactly 4 Night shifts on any available days.
+            model.Add(
+                sum(
+                    x[nurse, dept, di, 2]
+                    for dept in departments
+                    for di in range(len(DAYS))
+                ) == 4
+            )
 
         else:
 
@@ -224,12 +225,8 @@ def generate_roster(nurses, availability_df, nurse_departments, department_staff
                     model.Add(pair_start == 0)
 
             if valid_pair_starts:
-                # Exactly one pair is selected for each regular nurse
-                # who has at least one valid Night-Night-selected-Off option.
                 model.Add(sum(valid_pair_starts) == 1)
             else:
-                # Do not invent an Off day or assign isolated Night shifts
-                # when the nurse has not selected a valid pattern.
                 model.Add(
                     sum(
                         x[nurse, dept, di, 2]
@@ -239,7 +236,6 @@ def generate_roster(nurses, availability_df, nurse_departments, department_staff
                 )
 
             # Link Night assignments to the selected pair only.
-            # A Night can occur only on the first or second day of that pair.
             for di in range(len(DAYS)):
                 previous_day = (di - 1) % len(DAYS)
                 night_assignment = sum(
@@ -251,7 +247,6 @@ def generate_roster(nurses, availability_df, nurse_departments, department_staff
                 )
 
             # Regular nurses: aim for at least 2 Morning and 2 Evening shifts.
-            # Night count is governed by the exact pair rule above.
             for si, shift in enumerate(SHIFTS[:2]):
 
                 nurse_shift_total = sum(
