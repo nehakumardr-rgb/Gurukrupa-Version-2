@@ -126,11 +126,10 @@ def generate_roster(nurses, availability_df, nurse_departments, department_staff
     # Monday is treated as a valid consecutive 3-day sequence.
     # --------------------------------------------------------
 
+    
     # --------------------------------------------------------
-    # DEPARTMENT STAFFING REQUIREMENTS
+    # DEPARTMENT STAFFING REQUIREMENTS - MANDATORY MINIMUM
     # --------------------------------------------------------
-
-    coverage_shortages = []
 
     for department in departments:
         req = department_staffing_requirements[department]
@@ -144,13 +143,8 @@ def generate_roster(nurses, availability_df, nurse_departments, department_staff
                     for nurse in nurses
                 )
 
-                shortage = model.NewIntVar(
-                    0, required,
-                    f"shortage_{department}_{di}_{si}"
-                )
-
-                model.Add(assigned + shortage >= required)
-                coverage_shortages.append(shortage)
+                # Mandatory minimum coverage - cannot be violated.
+                model.Add(assigned >= required)
 
 
 
@@ -321,8 +315,7 @@ def generate_roster(nurses, availability_df, nurse_departments, department_staff
     )
 
     model.Minimize(
-        2_000_000_000 * sum(coverage_shortages)
-        + 100_000_000 * sum(individual_shift_shortages)
+    100_000_000 * sum(individual_shift_shortages)
         - 1_000_000 * total_allocated_shifts
         - 250_000 * sum(consecutive_night_pairs)
         - 100_000 * sum(off_after_night_pairs)
